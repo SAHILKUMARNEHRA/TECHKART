@@ -24,7 +24,7 @@ export function NavBar() {
   const [accountOpen, setAccountOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
-  const { user, logout, authError: authStateError } = useAuth();
+  const { user, isAdmin, logout, authError: authStateError } = useAuth();
   const { compareIds } = useCompare();
   const { cartCount } = useCart();
   const accountRef = useRef<HTMLDivElement | null>(null);
@@ -191,12 +191,14 @@ export function NavBar() {
           >
             Browse Products
           </Link>
-          <Link
-            href="/admin"
-            className="shrink-0 rounded-lg border border-cyan-200 px-3 py-1.5 text-sm font-semibold text-cyan-700"
-          >
-            Admin
-          </Link>
+          {isAdmin ? (
+            <Link
+              href="/admin"
+              className="shrink-0 rounded-lg border border-cyan-200 px-3 py-1.5 text-sm font-semibold text-cyan-700"
+            >
+              Admin
+            </Link>
+          ) : null}
         </div>
       </div>
       {authError || authStateError ? (
