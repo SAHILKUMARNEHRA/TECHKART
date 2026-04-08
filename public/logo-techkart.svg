@@ -1,0 +1,12 @@
+<svg width="256" height="72" viewBox="0 0 256 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tkGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0057D9"/>
+      <stop offset="100%" stop-color="#4AA3FF"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="64" height="64" rx="18" fill="url(#tkGrad)"/>
+  <path d="M24 24H49V30H39V48H33V30H24V24Z" fill="white"/>
+  <path d="M52 24L42 35L53 48H45L36 37V48H30V24H36V34L45 24H52Z" fill="white"/>
+  <text x="84" y="45" font-size="32" font-family="Plus Jakarta Sans, Arial, sans-serif" font-weight="700" fill="#0F172A">TechKart</text>
+</svg>
