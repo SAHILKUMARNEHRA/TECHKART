@@ -166,11 +166,8 @@ function shouldUseLiveMarketData() {
     return true;
   }
 
-  if (explicitSetting === "false") {
-    return false;
-  }
-
-  return process.env.NODE_ENV === "production";
+  // Reliability first: keep production stable unless live market data is explicitly enabled.
+  return false;
 }
 
 async function withHardTimeout<T>(promise: Promise<T>, timeoutMs: number) {
