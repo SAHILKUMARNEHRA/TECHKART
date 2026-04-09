@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import { TechNewsSection } from "@/components/home/tech-news-section";
 import { WelcomeBanner } from "@/components/home/welcome-banner";
@@ -19,7 +20,7 @@ const stats = [
 ];
 
 export default async function HomePage() {
-  const products = await getProducts();
+  const products = (await getProducts()) || [];
   const trending = products.filter((item) => item.trending).slice(0, 8);
   const buckets = getPriceBucketSections(products);
 
@@ -85,7 +86,9 @@ export default async function HomePage() {
         </div>
       </Section>
 
-      <TechNewsSection />
+      <Suspense fallback={<div className="h-48 w-full animate-pulse rounded-2xl bg-slate-100" />}>
+        <TechNewsSection />
+      </Suspense>
 
     </div>
   );

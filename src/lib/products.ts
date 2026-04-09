@@ -3,8 +3,8 @@ import { fallbackProducts } from "@/lib/fallback-data";
 import { Product, ProductCategory, SortOption } from "@/types/product";
 
 const DUMMY_JSON_BASE = "https://dummyjson.com";
-const DUMMY_FETCH_TIMEOUT_MS = 5000;
-const LIVE_PRODUCTS_HARD_TIMEOUT_MS = 3500;
+const DUMMY_FETCH_TIMEOUT_MS = 3000;
+const LIVE_PRODUCTS_HARD_TIMEOUT_MS = 4000;
 const MIN_RECENT_RELEASE_YEAR = new Date().getFullYear() - 2;
 const TRUSTED_BRANDS = new Set([
   "Apple",
@@ -182,37 +182,43 @@ async function withHardTimeout<T>(promise: Promise<T>, timeoutMs: number) {
 const getProductsCached = cache(async (): Promise<Product[]> => {
   try {
     if (shouldUseLiveMarketData()) {
-      const { hasRealMarketConfig, getLiveMarketProducts } = await import(
-        "@/lib/server/market-api"
-      );
-      if (hasRealMarketConfig()) {
-        const liveProducts = await withHardTimeout(
-          getLiveMarketProducts(12),
-          LIVE_PRODUCTS_HARD_TIMEOUT_MS,
+      try {
+        const { hasRealMarketConfig, getLiveMarketProducts } = await import(
+          "@/lib/server/market-api"
         );
-        if (liveProducts.length > 0) {
-          const byCategory = new Map(
-            ["Mobiles", "Laptops", "Tablets", "Smartwatches", "Earbuds"].map((category) => [
-              category,
-              liveProducts.filter((item) => item.category === category).length,
-            ]),
+        if (hasRealMarketConfig()) {
+          const liveProducts = await withHardTimeout(
+            getLiveMarketProducts(12),
+            LIVE_PRODUCTS_HARD_TIMEOUT_MS,
           );
-          const boostedFallback = getCuratedProducts().filter((item) => {
-            const count = byCategory.get(item.category) ?? 0;
-            return count < 10;
-          });
-          return filterTrustedBrands([...liveProducts, ...boostedFallback]);
+          if (liveProducts && liveProducts.length > 0) {
+            const byCategory = new Map(
+              ["Mobiles", "Laptops", "Tablets", "Smartwatches", "Earbuds"].map((category) => [
+                category,
+                liveProducts.filter((item) => item.category === category).length,
+              ]),
+            );
+            const boostedFallback = getCuratedProducts().filter((item) => {
+              const count = byCategory.get(item.category) ?? 0;
+              return count < 10;
+            });
+            return filterTrustedBrands([...liveProducts, ...boostedFallback]);
+          }
         }
+      } catch (marketError) {
+        console.error("Market API error:", marketError);
       }
     }
 
     return getCuratedProducts();
-  } catch {
+  } catch (outerError) {
+    console.error("Critical error in getProductsCached:", outerError);
     try {
       const dummyData = await fetchDummyProducts();
       const curatedProducts = getCuratedProducts();
       return filterTrustedBrands([...curatedProducts, ...dummyData.filter(isRecentProduct)]);
-    } catch {
+    } catch (innerError) {
+      console.error("Fallback error:", innerError);
       return getCuratedProducts();
     }
   }
