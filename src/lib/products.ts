@@ -4,6 +4,7 @@ import { Product, ProductCategory, SortOption } from "@/types/product";
 
 const DUMMY_JSON_BASE = "https://dummyjson.com";
 const DUMMY_FETCH_TIMEOUT_MS = 5000;
+const LIVE_PRODUCTS_HARD_TIMEOUT_MS = 3500;
 const MIN_RECENT_RELEASE_YEAR = new Date().getFullYear() - 2;
 const TRUSTED_BRANDS = new Set([
   "Apple",
@@ -172,6 +173,15 @@ function shouldUseLiveMarketData() {
   return process.env.NODE_ENV === "production";
 }
 
+async function withHardTimeout<T>(promise: Promise<T>, timeoutMs: number) {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error("Live data timeout")), timeoutMs);
+    }),
+  ]);
+}
+
 const getProductsCached = cache(async (): Promise<Product[]> => {
   try {
     if (shouldUseLiveMarketData()) {
@@ -179,7 +189,10 @@ const getProductsCached = cache(async (): Promise<Product[]> => {
         "@/lib/server/market-api"
       );
       if (hasRealMarketConfig()) {
-        const liveProducts = await getLiveMarketProducts(18);
+        const liveProducts = await withHardTimeout(
+          getLiveMarketProducts(12),
+          LIVE_PRODUCTS_HARD_TIMEOUT_MS,
+        );
         if (liveProducts.length > 0) {
           const byCategory = new Map(
             ["Mobiles", "Laptops", "Tablets", "Smartwatches", "Earbuds"].map((category) => [
