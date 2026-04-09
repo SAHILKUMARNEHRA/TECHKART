@@ -1,6 +1,7 @@
 import { Product, ProductCategory } from "@/types/product";
 
 const MARKET_FETCH_TIMEOUT_MS = 6000;
+const LIVE_PRODUCTS_CACHE_TTL_MS = 15 * 60 * 1000;
 
 function getEbayBaseUrl() {
   const env = process.env.EBAY_ENV?.toLowerCase();
@@ -72,6 +73,7 @@ const TRUSTED_BRANDS = [
 
 let tokenCache: { token: string; expiresAt: number } | null = null;
 let usdToInrCache: { value: number; expiresAt: number } | null = null;
+let liveProductsCache: { products: Product[]; expiresAt: number } | null = null;
 
 const categoryQueries: Record<ProductCategory, string[]> = {
   Mobiles: [
@@ -452,7 +454,7 @@ async function fetchCategoryProducts(
   category: ProductCategory,
   limit: number,
 ): Promise<Product[]> {
-  const queries = categoryQueries[category];
+  const queries = categoryQueries[category].slice(0, 3);
   const responses = await Promise.allSettled(
     queries.map(async (query) => {
       const url = new URL(`${getEbayBaseUrl()}/buy/browse/v1/item_summary/search`);
@@ -504,6 +506,10 @@ async function fetchCategoryProducts(
 }
 
 export async function getLiveMarketProducts(limitPerCategory = 14): Promise<Product[]> {
+  if (liveProductsCache && liveProductsCache.expiresAt > Date.now()) {
+    return liveProductsCache.products;
+  }
+
   const token = await getEbayAccessToken();
 
   const categories: ProductCategory[] = [
@@ -520,7 +526,7 @@ export async function getLiveMarketProducts(limitPerCategory = 14): Promise<Prod
     ),
   );
 
-  return items
+  const products = items
     .filter(
       (
         result,
@@ -528,6 +534,13 @@ export async function getLiveMarketProducts(limitPerCategory = 14): Promise<Prod
         result.status === "fulfilled",
     )
     .flatMap((result) => result.value);
+
+  liveProductsCache = {
+    products,
+    expiresAt: Date.now() + LIVE_PRODUCTS_CACHE_TTL_MS,
+  };
+
+  return products;
 }
 
 export async function getLiveProductById(id: string): Promise<Product | undefined> {
