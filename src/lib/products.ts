@@ -54,6 +54,9 @@ function normalizeDummyProduct(item: DummyProduct): Product {
   const ramGb = category === "Laptops" ? 16 : category === "Tablets" ? 8 : 8;
   const storageGb = category === "Laptops" ? 512 : 256;
 
+  // Use a reliable thumbnail fallback
+  const image = item.thumbnail || (item.images && item.images[0]) || "https://dummyjson.com/image/600x400?text=Product+Image";
+
   return {
     id: `d-${item.id}`,
     slug: item.title.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
@@ -66,8 +69,8 @@ function normalizeDummyProduct(item: DummyProduct): Product {
     rating: Number(item.rating.toFixed(1)),
     ratingCount: (item.stock ?? 100) * 19,
     discountPercent,
-    image: item.thumbnail,
-    gallery: item.images?.length ? item.images.slice(0, 4) : [item.thumbnail],
+    image,
+    gallery: item.images?.length ? item.images.slice(0, 4) : [image],
     shortSpecs: [
       `${ramGb}GB RAM`,
       `${storageGb}GB Storage`,

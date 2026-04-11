@@ -15,6 +15,7 @@ export default function LoginPage() {
 function LoginContent() {
   const { user, signInWithGoogle, signInWithCredentials, logout, authError } = useAuth();
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
   const [credentials, setCredentials] = useState({
     fullName: "",
     email: "",
@@ -23,6 +24,41 @@ function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const next = searchParams.get("next") || "/";
+
+  const onGoogleSignIn = async () => {
+    try {
+      setLoading(true);
+      setError("");
+      await signInWithGoogle();
+      router.push(next);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Could not sign in with Google.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const onCredentialsSignIn = async (event: React.FormEvent) => {
+    event.preventDefault();
+    try {
+      setLoading(true);
+      setError("");
+      await signInWithCredentials(credentials);
+      router.push(next);
+    } catch (nextError) {
+      setError(
+        nextError instanceof Error
+          ? nextError.message
+          : "Could not sign in with credentials.",
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
     <div className="mx-auto max-w-5xl px-4 py-16 sm:px-6 lg:px-8">
@@ -34,20 +70,22 @@ function LoginContent() {
       {user ? (
         <div className="mt-6 rounded-3xl border border-slate-200 bg-white p-6 text-center shadow-sm">
           <p className="text-sm text-slate-700">Logged in as {user.email}</p>
-          <button
-            type="button"
-            onClick={() => router.push(next)}
-            className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white"
-          >
-            Continue
-          </button>
-          <button
-            type="button"
-            onClick={logout}
-            className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
-          >
-            Logout
-          </button>
+          <div className="mt-4 flex justify-center gap-3">
+            <button
+              type="button"
+              onClick={() => router.push(next)}
+              className="rounded-xl bg-cyan-600 px-4 py-2 text-sm font-semibold text-white"
+            >
+              Continue to Site
+            </button>
+            <button
+              type="button"
+              onClick={logout}
+              className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700"
+            >
+              Logout
+            </button>
+          </div>
         </div>
       ) : (
         <div className="mt-8 grid gap-6 lg:grid-cols-2">
@@ -58,55 +96,46 @@ function LoginContent() {
             </p>
             <form
               className="mt-5 space-y-3"
-              onSubmit={async (event) => {
-                event.preventDefault();
-                try {
-                  await signInWithCredentials(credentials);
-                  setError("");
-                  router.push(next);
-                } catch (nextError) {
-                  setError(
-                    nextError instanceof Error
-                      ? nextError.message
-                      : "Could not sign in with credentials.",
-                  );
-                }
-              }}
+              onSubmit={onCredentialsSignIn}
             >
               <input
                 type="text"
+                disabled={loading}
                 value={credentials.fullName}
                 onChange={(event) =>
                   setCredentials((prev) => ({ ...prev, fullName: event.target.value }))
                 }
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm disabled:opacity-50"
                 placeholder="Full name"
               />
               <input
                 type="email"
+                disabled={loading}
                 value={credentials.email}
                 onChange={(event) =>
                   setCredentials((prev) => ({ ...prev, email: event.target.value }))
                 }
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm disabled:opacity-50"
                 placeholder="Email address"
                 required
               />
               <input
                 type="password"
+                disabled={loading}
                 value={credentials.password}
                 onChange={(event) =>
                   setCredentials((prev) => ({ ...prev, password: event.target.value }))
                 }
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm"
+                className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm disabled:opacity-50"
                 placeholder="Password"
                 required
               />
               <button
                 type="submit"
-                className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white"
+                disabled={loading}
+                className="w-full rounded-xl bg-slate-900 px-4 py-3 text-sm font-semibold text-white transition hover:bg-slate-800 disabled:opacity-50"
               >
-                Continue with Credentials
+                {loading ? "Authenticating..." : "Continue with Credentials"}
               </button>
             </form>
           </section>
@@ -118,28 +147,21 @@ function LoginContent() {
             </p>
             <button
               type="button"
-              onClick={async () => {
-                try {
-                  await signInWithGoogle();
-                  setError("");
-                  router.push(next);
-                } catch (nextError) {
-                  setError(
-                    nextError instanceof Error
-                      ? nextError.message
-                      : "Could not sign in with Google.",
-                  );
-                }
-              }}
-              className="mt-5 w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white"
+              disabled={loading}
+              onClick={onGoogleSignIn}
+              className="mt-5 w-full rounded-xl bg-blue-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-blue-700 disabled:opacity-50"
             >
-              Continue with Google
+              {loading ? "Opening Google..." : "Continue with Google"}
             </button>
           </section>
         </div>
       )}
 
-      {error || authError ? <p className="mt-4 text-sm text-rose-600">{error || authError}</p> : null}
+      {error || authError ? (
+        <div className="mt-4 rounded-xl bg-rose-50 p-4 text-sm text-rose-600">
+          {error || authError}
+        </div>
+      ) : null}
     </div>
   );
 }

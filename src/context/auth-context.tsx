@@ -217,26 +217,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const unsubAuth = onAuthStateChanged(auth, async (nextUser) => {
       if (nextUser?.email) {
-        // Need to check current blocked list
-        const settingsSnap = await getDoc(settingsRef);
-        const currentBlocked = settingsSnap.exists() ? settingsSnap.data().blockedEmails || [] : [];
-        
-        if (currentBlocked.includes(normalizeEmail(nextUser.email))) {
-          await appendAuthLog({
-            email: normalizeEmail(nextUser.email),
-            displayName: nextUser.displayName ?? nextUser.email,
-            provider: "google",
-            action: "blocked_attempt",
-          });
-          await signOut(auth);
-          setUser(null);
-          setAuthError("This account has been blocked by admin access control.");
-          setLoading(false);
-          return;
+        try {
+          // Need to check current blocked list
+          const settingsSnap = await getDoc(settingsRef);
+          const currentBlocked = settingsSnap.exists() ? settingsSnap.data().blockedEmails || [] : [];
+          
+          if (currentBlocked.includes(normalizeEmail(nextUser.email))) {
+            await appendAuthLog({
+              email: normalizeEmail(nextUser.email),
+              displayName: nextUser.displayName ?? nextUser.email,
+              provider: "google",
+              action: "blocked_attempt",
+            });
+            await signOut(auth);
+            setUser(null);
+            setAuthError("This account has been blocked by admin access control.");
+            setLoading(false);
+            return;
+          }
+        } catch (err) {
+          console.error("Error checking blocked status:", err);
         }
       }
 
-      setUser(nextUser ? mapFirebaseUser(nextUser) : readLocalUser());
+      const mappedUser = nextUser ? mapFirebaseUser(nextUser) : readLocalUser();
+      setUser(mappedUser);
+      
+      // Persist to local storage if user is logged in
+      if (mappedUser) {
+        writeLocalUser(mappedUser);
+      }
+      
       setLoading(false);
     });
 
