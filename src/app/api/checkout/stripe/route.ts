@@ -2,25 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 import Stripe from "stripe";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2025-01-27.acacia",
+  apiVersion: "2026-03-25.dahlia" as any,
 });
 
 export async function POST(req: NextRequest) {
   try {
     const { items, email, address } = await req.json();
 
-    const lineItems = items.map((item: any) => ({
-      price_data: {
-        currency: "inr",
-        product_data: {
-          name: item.product.name.slice(0, 100), // Stripe limit
-          images: item.product.image ? [item.product.image] : [],
-          description: item.product.brand.slice(0, 500), // Stripe limit
+    const lineItems = items.map((item: any) => {
+      const imageUrl = item.product.image?.startsWith("http")
+        ? item.product.image
+        : `${req.nextUrl.origin}${item.product.image}`;
+
+      return {
+        price_data: {
+          currency: "inr",
+          product_data: {
+            name: item.product.name.slice(0, 100),
+            description: item.product.brand.slice(0, 500),
+          },
+          unit_amount: Math.round(item.product.price * 100),
         },
-        unit_amount: Math.round(item.product.price * 100),
-      },
-      quantity: item.quantity,
-    }));
+        quantity: item.quantity,
+      };
+    });
 
     // Add shipping fee if applicable (matching CheckoutPage logic)
     const cartTotal = items.reduce(
@@ -57,7 +62,10 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ id: session.id, url: session.url });
   } catch (err: any) {
-    console.error("Stripe Session Error:", err);
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    console.error("Full Stripe Error:", JSON.stringify(err, null, 2));
+    return NextResponse.json(
+      { error: err.message || "Internal Server Error", detail: err.type },
+      { status: 500 }
+    );
   }
 }
