@@ -15,25 +15,25 @@ import {
   orderBy,
   limit,
   setDoc,
-  getDoc,
 } from "firebase/firestore";
 import { auth, db, googleProvider, isFirebaseConfigured } from "@/lib/firebase";
 
 const ADMIN_EMAIL = "sk.nehra2005@gmail.com";
-const LOCAL_STORAGE_KEY = "techkart_session_v1";
+const SESSION_STORAGE_KEY = "techkart_pro_session";
 
 export interface AuthUser {
   uid: string;
   email: string | null;
   displayName: string | null;
-  provider: "google" | "credentials";
+  provider: "professional" | "normal";
+  lastLogin: string;
 }
 
 export interface AuthLogEntry {
   id: string;
   email: string;
   displayName: string;
-  provider: "google" | "credentials";
+  provider: "professional" | "normal";
   action: "login" | "logout" | "blocked_attempt";
   createdAt: string;
 }
@@ -45,36 +45,22 @@ interface AuthContextValue {
   isAdmin: boolean;
   blockedUsers: string[];
   authLogs: AuthLogEntry[];
-  signInWithGoogle: () => Promise<void>;
-  signInWithCredentials: (input: {
-    email: string;
-    password: string;
-    fullName?: string;
-  }) => Promise<void>;
+  loginProfessional: () => Promise<void>;
+  loginNormal: (input: { email: string; fullName?: string }) => Promise<void>;
   logout: () => Promise<void>;
-  toggleBlockedUser: (email: string) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
-
-function mapFirebaseUser(user: User): AuthUser {
-  return {
-    uid: user.uid,
-    email: user.email,
-    displayName: user.displayName,
-    provider: "google",
-  };
-}
 
 function normalizeEmail(email: string | null | undefined) {
   return (email ?? "").trim().toLowerCase();
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // 1. Initial State from LocalStorage for Instant UI
+  // --- Professional Session Management ---
   const [user, setUser] = useState<AuthUser | null>(() => {
     if (typeof window === "undefined") return null;
-    const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
+    const saved = localStorage.getItem(SESSION_STORAGE_KEY);
     return saved ? JSON.parse(saved) : null;
   });
   
@@ -83,17 +69,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [authLogs, setAuthLogs] = useState<AuthLogEntry[]>([]);
   const [blockedUsers, setBlockedUsers] = useState<string[]>([]);
 
-  // 2. Persistent Storage Helper
-  const persistUser = useCallback((nextUser: AuthUser | null) => {
+  const persistSession = useCallback((nextUser: AuthUser | null) => {
     setUser(nextUser);
     if (typeof window !== "undefined") {
-      if (nextUser) localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(nextUser));
-      else localStorage.removeItem(LOCAL_STORAGE_KEY);
+      if (nextUser) localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(nextUser));
+      else localStorage.removeItem(SESSION_STORAGE_KEY);
     }
   }, []);
 
-  // 3. Auth Log Helper
-  const appendLog = useCallback(async (entry: Omit<AuthLogEntry, "id" | "createdAt">) => {
+  const appendAuditLog = useCallback(async (entry: Omit<AuthLogEntry, "id" | "createdAt">) => {
     if (!isFirebaseConfigured) return;
     const logEntry: AuthLogEntry = {
       id: crypto.randomUUID(),
@@ -103,36 +87,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await setDoc(doc(collection(db, "auth_logs"), logEntry.id), logEntry);
     } catch (e) {
-      console.error("Log error:", e);
+      console.error("Audit log failed:", e);
     }
   }, []);
 
+  // --- Real-time Cloud Data Synchronization ---
   useEffect(() => {
     if (!isFirebaseConfigured) {
       setLoading(false);
       return;
     }
 
-    // A. Real-time Blocked Users List
+    // A. Security Policy Sync (Blocked Users)
     const unsubBlocked = onSnapshot(doc(db, "settings", "access_control"), (snap) => {
       if (snap.exists()) setBlockedUsers(snap.data().blockedEmails || []);
     });
 
-    // B. Real-time Logs (Admin Only Feel)
-    const logsQuery = query(collection(db, "auth_logs"), orderBy("createdAt", "desc"), limit(30));
-    const unsubLogs = onSnapshot(logsQuery, (snap) => {
-      setAuthLogs(snap.docs.map(d => d.data() as AuthLogEntry));
-    });
+    // B. Real-time Audit Logs (Top 30)
+    const unsubLogs = onSnapshot(
+      query(collection(db, "auth_logs"), orderBy("createdAt", "desc"), limit(30)),
+      (snap) => setAuthLogs(snap.docs.map(d => d.data() as AuthLogEntry))
+    );
 
-    // C. Firebase Auth Observer
+    // C. Firebase Auth State Observer
     const unsubAuth = onAuthStateChanged(auth, (firebaseUser) => {
       if (firebaseUser) {
-        const mapped = mapFirebaseUser(firebaseUser);
-        persistUser(mapped);
+        const proUser: AuthUser = {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          displayName: firebaseUser.displayName,
+          provider: "professional",
+          lastLogin: new Date().toISOString(),
+        };
+        persistSession(proUser);
       } else {
-        // Only clear if not using credentials
-        const current = readLocalSession();
-        if (current?.provider === "google") persistUser(null);
+        // Only clear if the current session was Professional
+        const current = user;
+        if (current?.provider === "professional") persistSession(null);
       }
       setLoading(false);
     });
@@ -142,13 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       unsubLogs();
       unsubAuth();
     };
-  }, [persistUser]);
-
-  function readLocalSession(): AuthUser | null {
-    if (typeof window === "undefined") return null;
-    const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-    return saved ? JSON.parse(saved) : null;
-  }
+  }, [persistSession, user]);
 
   const value = useMemo(() => ({
     user,
@@ -157,61 +142,69 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     isAdmin: normalizeEmail(user?.email) === ADMIN_EMAIL,
     blockedUsers,
     authLogs,
-    signInWithGoogle: async () => {
+    
+    // --- PROFESSIONAL LOGIN (GOOGLE) ---
+    loginProfessional: async () => {
       setAuthError("");
-      persistUser(null);
+      persistSession(null); // Hard reset
       try {
         const res = await signInWithPopup(auth, googleProvider);
-        const mapped = mapFirebaseUser(res.user);
-        persistUser(mapped);
-        await appendLog({
-          email: normalizeEmail(mapped.email),
-          displayName: mapped.displayName ?? mapped.email ?? "User",
-          provider: "google",
+        const proUser: AuthUser = {
+          uid: res.user.uid,
+          email: res.user.email,
+          displayName: res.user.displayName,
+          provider: "professional",
+          lastLogin: new Date().toISOString(),
+        };
+        persistSession(proUser);
+        await appendAuditLog({
+          email: normalizeEmail(proUser.email),
+          displayName: proUser.displayName ?? proUser.email ?? "Pro User",
+          provider: "professional",
           action: "login",
         });
       } catch (e: any) {
         if (e.code !== "auth/popup-closed-by-user") setAuthError(e.message);
       }
     },
-    signInWithCredentials: async (input: { email: string; fullName?: string }) => {
+
+    // --- NORMAL LOGIN (CREDENTIALS) ---
+    loginNormal: async (input: { email: string; fullName?: string }) => {
       setAuthError("");
       const email = normalizeEmail(input.email);
       const name = input.fullName?.trim() || email.split("@")[0];
       
-      const credUser: AuthUser = {
-        uid: `c-${email}`,
+      const normalUser: AuthUser = {
+        uid: `normal-${email}`,
         email,
         displayName: name,
-        provider: "credentials",
+        provider: "normal",
+        lastLogin: new Date().toISOString(),
       };
       
-      persistUser(credUser);
-      await appendLog({
+      persistSession(normalUser);
+      await appendAuditLog({
         email,
         displayName: name,
-        provider: "credentials",
+        provider: "normal",
         action: "login",
       });
     },
+
     logout: async () => {
       const prev = user;
       if (auth.currentUser) await signOut(auth);
-      persistUser(null);
+      persistSession(null);
       if (prev?.email) {
-        await appendLog({
+        await appendAuditLog({
           email: normalizeEmail(prev.email),
           displayName: prev.displayName ?? prev.email,
           provider: prev.provider,
           action: "logout",
         });
       }
-    },
-    toggleBlockedUser: async (email: string) => {
-      // Admin only logic handled via Firestore updateDoc elsewhere or added here if needed
-      console.log("Toggle block:", email);
     }
-  }), [user, loading, authError, blockedUsers, authLogs, persistUser, appendLog]);
+  }), [user, loading, authError, blockedUsers, authLogs, persistSession, appendAuditLog]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
