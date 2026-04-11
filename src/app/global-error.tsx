@@ -33,21 +33,21 @@ export default function GlobalError({
           </svg>
         </div>
         <h2 className="mb-2 text-3xl font-bold text-slate-900">Critical Error</h2>
-        <p className="mb-8 max-w-md text-slate-600">
+        <p className="mb-4 max-w-md text-slate-600">
           The application encountered a critical error. This usually happens when environment variables are missing or misconfigured in the deployment settings.
         </p>
+        <div className="mb-8 max-w-2xl overflow-auto rounded-lg bg-slate-100 p-4 text-left text-xs text-red-700">
+          <p className="font-bold mb-2">Error Details:</p>
+          <p>{error.message || 'No error message provided'}</p>
+          {error.digest && <p className="mt-1">Digest: {error.digest}</p>}
+          {error.stack && <pre className="mt-2 whitespace-pre-wrap">{error.stack}</pre>}
+        </div>
         <button
           onClick={() => reset()}
           className="rounded-xl bg-blue-700 px-8 py-3 font-semibold text-white transition hover:bg-blue-800 shadow-lg shadow-blue-200"
         >
           Restart Application
         </button>
-        {process.env.NODE_ENV === 'development' && (
-          <pre className="mt-8 max-w-full overflow-auto rounded-lg bg-slate-200 p-4 text-left text-xs text-red-700">
-            {error.message}
-            {error.stack}
-          </pre>
-        )}
       </body>
     </html>
   );

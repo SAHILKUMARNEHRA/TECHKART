@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, LogOut, Moon, Search, ShoppingCart, Sun, UserCircle2 } from "lucide-react";
+import { ChevronDown, LogOut, Moon, Search, ShoppingCart, Sun, User } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { FormEvent, useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -114,7 +114,7 @@ export function NavBar() {
               className="inline-flex items-center gap-2 rounded-xl border border-cyan-100 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
             >
               <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-cyan-600 text-white">
-                <UserCircle2 size={16} />
+                <User size={16} />
               </span>
               <span className="hidden sm:block">
                 {user ? user.displayName?.split(" ")[0] ?? "Account" : "Account"}

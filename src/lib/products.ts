@@ -183,12 +183,10 @@ const getProductsCached = cache(async (): Promise<Product[]> => {
   try {
     if (shouldUseLiveMarketData()) {
       try {
-        const { hasRealMarketConfig, getLiveMarketProducts } = await import(
-          "@/lib/server/market-api"
-        );
-        if (hasRealMarketConfig()) {
+        const marketApi = await import("@/lib/server/market-api");
+        if (marketApi && marketApi.hasRealMarketConfig()) {
           const liveProducts = await withHardTimeout(
-            getLiveMarketProducts(12),
+            marketApi.getLiveMarketProducts(12),
             LIVE_PRODUCTS_HARD_TIMEOUT_MS,
           );
           if (liveProducts && liveProducts.length > 0) {
@@ -238,11 +236,9 @@ export async function getProductById(id: string): Promise<Product | undefined> {
 
   if (typeof window === "undefined" && decodedId.startsWith("ebay-") && shouldUseLiveMarketData()) {
     try {
-      const { hasRealMarketConfig, getLiveProductById } = await import(
-        "@/lib/server/market-api"
-      );
-      if (hasRealMarketConfig()) {
-        return await getLiveProductById(decodedId);
+      const marketApi = await import("@/lib/server/market-api");
+      if (marketApi && marketApi.hasRealMarketConfig()) {
+        return await marketApi.getLiveProductById(decodedId);
       }
     } catch {
       return undefined;

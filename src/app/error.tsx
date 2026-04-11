@@ -34,9 +34,15 @@ export default function Error({
         </svg>
       </div>
       <h2 className="mb-2 text-2xl font-bold text-slate-900">Something went wrong!</h2>
-      <p className="mb-8 max-w-md text-slate-600">
+      <p className="mb-4 max-w-md text-slate-600">
         We encountered an error while loading this page. This might be due to a temporary network issue or missing configuration.
       </p>
+      <div className="mb-8 max-w-2xl overflow-auto rounded-lg bg-slate-50 p-4 text-left text-xs text-red-700">
+        <p className="font-bold mb-2">Error Details:</p>
+        <p>{error.message || 'No error message provided'}</p>
+        {error.digest && <p className="mt-1">Digest: {error.digest}</p>}
+        {error.stack && <pre className="mt-2 whitespace-pre-wrap">{error.stack}</pre>}
+      </div>
       <div className="flex flex-wrap gap-4 justify-center">
         <button
           onClick={() => reset()}
@@ -51,12 +57,6 @@ export default function Error({
           Go Home
         </Link>
       </div>
-      {process.env.NODE_ENV === 'development' && (
-        <pre className="mt-8 max-w-full overflow-auto rounded-lg bg-slate-100 p-4 text-left text-xs text-red-600">
-          {error.message}
-          {error.stack}
-        </pre>
-      )}
     </div>
   );
 }
