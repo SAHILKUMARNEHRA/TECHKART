@@ -201,6 +201,7 @@ async function getEbayAccessToken() {
     },
     body: "grant_type=client_credentials&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope",
     cache: "no-store",
+    next: { revalidate: 0 },
     signal: AbortSignal.timeout(MARKET_FETCH_TIMEOUT_MS),
   });
 

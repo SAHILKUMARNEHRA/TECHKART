@@ -19,6 +19,8 @@ const stats = [
   { label: "Price Snapshots", value: "Daily" },
 ];
 
+export const dynamic = "force-dynamic";
+
 export default async function HomePage() {
   const products = (await getProducts()) || [];
   const trending = products.filter((item) => item.trending).slice(0, 8);
