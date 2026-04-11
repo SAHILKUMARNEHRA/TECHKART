@@ -183,8 +183,9 @@ async function appendAuthLog(entry: Omit<AuthLogEntry, "id" | "createdAt">) {
   }
 }
 
+// Remove all browser-side storage sync to prevent slowness and infinite loops
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(() => readLocalUser());
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
   const [authLogs, setAuthLogs] = useState<AuthLogEntry[]>([]);
@@ -196,18 +197,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Subscribe to auth logs
+    // Subscribe to auth logs in real-time
     const logsQuery = query(
       collection(db, "auth_logs"),
       orderBy("createdAt", "desc"),
-      limit(100)
+      limit(50)
     );
     const unsubLogs = onSnapshot(logsQuery, (snapshot) => {
-      const logs = snapshot.docs.map(doc => doc.data() as AuthLogEntry);
-      setAuthLogs(logs);
+      setAuthLogs(snapshot.docs.map(doc => doc.data() as AuthLogEntry));
     });
 
-    // Subscribe to blocked users
+    // Subscribe to blocked users in real-time
     const settingsRef = doc(db, "settings", "access_control");
     const unsubBlocked = onSnapshot(settingsRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -216,38 +216,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
 
     const unsubAuth = onAuthStateChanged(auth, async (nextUser) => {
-      if (nextUser?.email) {
-        try {
-          // Need to check current blocked list
-          const settingsSnap = await getDoc(settingsRef);
-          const currentBlocked = settingsSnap.exists() ? settingsSnap.data().blockedEmails || [] : [];
-          
-          if (currentBlocked.includes(normalizeEmail(nextUser.email))) {
-            await appendAuthLog({
-              email: normalizeEmail(nextUser.email),
-              displayName: nextUser.displayName ?? nextUser.email,
-              provider: "google",
-              action: "blocked_attempt",
-            });
-            await signOut(auth);
-            setUser(null);
-            setAuthError("This account has been blocked by admin access control.");
-            setLoading(false);
-            return;
-          }
-        } catch (err) {
-          console.error("Error checking blocked status:", err);
-        }
+      if (nextUser) {
+        setUser(mapFirebaseUser(nextUser));
+      } else {
+        setUser(null);
       }
-
-      const mappedUser = nextUser ? mapFirebaseUser(nextUser) : readLocalUser();
-      setUser(mappedUser);
-      
-      // Persist to local storage if user is logged in
-      if (mappedUser) {
-        writeLocalUser(mappedUser);
-      }
-      
       setLoading(false);
     });
 
@@ -314,34 +287,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw error;
         }
       },
-      signInWithCredentials: async ({
-        email,
-        password,
-        fullName,
-      }: {
-        email: string;
-        password: string;
-        fullName?: string;
-      }) => {
-        const normalizedEmail = email.trim().toLowerCase();
-        const normalizedName = fullName?.trim();
+      signInWithCredentials: async (input: { email: string; password: string; fullName?: string }) => {
+        setLoading(true);
+        setAuthError("");
+        const normalizedEmail = normalizeEmail(input.email);
+        const normalizedName = input.fullName?.trim() || "";
 
-        if (!normalizedEmail) {
-          throw new Error("Enter an email address to continue.");
-        }
-
-        if (password.trim().length < 6) {
-          throw new Error("Enter a password with at least 6 characters.");
-        }
-
-        if (isBlockedEmail(normalizedEmail, blockedUsers)) {
-          await appendAuthLog({
-            email: normalizedEmail,
-            displayName: normalizedName || normalizedEmail,
-            provider: "credentials",
-            action: "blocked_attempt",
-          });
-          throw new Error("This account has been blocked by admin access control.");
+        if (blockedUsers.includes(normalizedEmail)) {
+          setLoading(false);
+          throw new Error("This account has been blocked.");
         }
 
         const localUser: AuthUser = {
@@ -351,26 +305,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           provider: "credentials",
         };
 
-        writeLocalUser(localUser);
+        setUser(localUser);
         await appendAuthLog({
           email: normalizedEmail,
           displayName: localUser.displayName ?? normalizedEmail,
           provider: "credentials",
           action: "login",
         });
-        setUser(localUser);
-        setAuthError(
-          isFirebaseConfigured
-            ? ""
-            : "Signed in with local credentials. Add a valid Firebase web config to enable Google sign-in too.",
-        );
+        setLoading(false);
       },
       logout: async () => {
+        setLoading(true);
         const activeUser = user;
         if (auth.currentUser) {
           await signOut(auth);
         }
-        writeLocalUser(null);
         setUser(null);
         if (activeUser?.email) {
           await appendAuthLog({
@@ -381,6 +330,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           });
         }
         setAuthError("");
+        setLoading(false);
       },
       toggleBlockedUser: async (email: string) => {
         const normalized = normalizeEmail(email);
