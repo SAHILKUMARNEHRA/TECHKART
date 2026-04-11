@@ -84,6 +84,8 @@ function writeLocalUser(user: AuthUser | null) {
   localStorage.setItem(LOCAL_AUTH_KEY, JSON.stringify(user));
 }
 
+const authCache = new Map<string, { raw: string | null; parsed: unknown }>();
+
 function readJsonStore<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") {
     return fallback;
@@ -91,7 +93,15 @@ function readJsonStore<T>(key: string, fallback: T): T {
 
   try {
     const raw = localStorage.getItem(key);
-    return raw ? (JSON.parse(raw) as T) : fallback;
+    const cached = authCache.get(key);
+
+    if (cached && cached.raw === raw) {
+      return cached.parsed as T;
+    }
+
+    const parsed = raw ? (JSON.parse(raw) as T) : fallback;
+    authCache.set(key, { raw, parsed });
+    return parsed;
   } catch {
     return fallback;
   }
@@ -102,7 +112,9 @@ function writeJsonStore<T>(key: string, value: T) {
     return;
   }
 
-  localStorage.setItem(key, JSON.stringify(value));
+  const raw = JSON.stringify(value);
+  authCache.set(key, { raw, parsed: value });
+  localStorage.setItem(key, raw);
   window.dispatchEvent(new Event(`techkart-auth:${key}`));
 }
 
