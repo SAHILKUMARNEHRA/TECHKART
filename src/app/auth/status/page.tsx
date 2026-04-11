@@ -32,11 +32,11 @@ function StatusContent() {
 
   useEffect(() => {
     if (!authLoading && user) {
-      // Immediate skip to success state for < 1s feel
+      // Immediate skip to success state for < 500ms feel
       setStatusStep(3);
       const timer = setTimeout(() => {
         router.replace(next);
-      }, 800);
+      }, 400); // Super fast redirect
       return () => clearTimeout(timer);
     }
   }, [authLoading, user, router, next]);
