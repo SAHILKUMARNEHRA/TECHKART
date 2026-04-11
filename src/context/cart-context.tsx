@@ -1,6 +1,18 @@
 "use client";
 
-import { createContext, useContext, useMemo, useSyncExternalStore } from "react";
+import { createContext, useContext, useMemo, useEffect, useState } from "react";
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  orderBy,
+  limit,
+  setDoc,
+  where,
+} from "firebase/firestore";
+import { db, isFirebaseConfigured } from "@/lib/firebase";
+import { useAuth } from "./auth-context";
 import { Product } from "@/types/product";
 
 interface CartItem {
@@ -124,35 +136,39 @@ function subscribeKey(key: string, callback: () => void) {
 }
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
-  const cartItems = useSyncExternalStore(
-    (cb) => subscribeKey(KEY_CART, cb),
-    () => readStore<CartItem[]>(KEY_CART, EMPTY_CART),
-    () => EMPTY_CART,
-  );
+  const { user, isAdmin } = useAuth();
+  const [cartItems, setCartItems] = useState<CartItem[]>(() => readStore(KEY_CART, EMPTY_CART));
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [addresses, setAddresses] = useState<Address[]>(() => readStore(KEY_ADDR, EMPTY_ADDR));
+  const [activities, setActivities] = useState<Activity[]>([]);
+  const [profile, setProfile] = useState<UserProfile>(() => readStore(KEY_PROFILE, EMPTY_PROFILE));
 
-  const orders = useSyncExternalStore(
-    (cb) => subscribeKey(KEY_ORDERS, cb),
-    () => readStore<Order[]>(KEY_ORDERS, EMPTY_ORDERS),
-    () => EMPTY_ORDERS,
-  );
+  useEffect(() => {
+    if (!isFirebaseConfigured) return;
 
-  const addresses = useSyncExternalStore(
-    (cb) => subscribeKey(KEY_ADDR, cb),
-    () => readStore<Address[]>(KEY_ADDR, EMPTY_ADDR),
-    () => EMPTY_ADDR,
-  );
+    // Activities: Global if admin, otherwise user-specific
+    const actQuery = isAdmin 
+      ? query(collection(db, "activities"), orderBy("createdAt", "desc"), limit(50))
+      : query(collection(db, "activities"), where("userId", "==", user?.uid || "guest"), orderBy("createdAt", "desc"), limit(20));
+    
+    const unsubAct = onSnapshot(actQuery, (snap) => {
+      setActivities(snap.docs.map(doc => doc.data() as Activity));
+    });
 
-  const activities = useSyncExternalStore(
-    (cb) => subscribeKey(KEY_ACT, cb),
-    () => readStore<Activity[]>(KEY_ACT, EMPTY_ACT),
-    () => EMPTY_ACT,
-  );
+    // Orders: Global if admin, otherwise user-specific
+    const orderQuery = isAdmin
+      ? query(collection(db, "orders"), orderBy("createdAt", "desc"), limit(100))
+      : query(collection(db, "orders"), where("userId", "==", user?.uid || "guest"), orderBy("createdAt", "desc"));
 
-  const profile = useSyncExternalStore(
-    (cb) => subscribeKey(KEY_PROFILE, cb),
-    () => readStore<UserProfile>(KEY_PROFILE, EMPTY_PROFILE),
-    () => EMPTY_PROFILE,
-  );
+    const unsubOrders = onSnapshot(orderQuery, (snap) => {
+      setOrders(snap.docs.map(doc => doc.data() as Order));
+    });
+
+    return () => {
+      unsubAct();
+      unsubOrders();
+    };
+  }, [user, isAdmin]);
 
   const value = useMemo<CartContextValue>(() => {
     const cartCount = cartItems.reduce((acc, item) => acc + item.quantity, 0);
@@ -161,16 +177,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       0,
     );
 
-    const addActivity = (message: string) => {
-      const next: Activity[] = [
-        {
-          id: crypto.randomUUID(),
-          message,
-          createdAt: new Date().toISOString(),
-        },
-        ...readStore<Activity[]>(KEY_ACT, []),
-      ];
-      writeStore(KEY_ACT, next);
+    const addActivity = async (message: string) => {
+      const activity: Activity & { userId: string } = {
+        id: crypto.randomUUID(),
+        message,
+        createdAt: new Date().toISOString(),
+        userId: user?.uid || "guest"
+      };
+      
+      if (isFirebaseConfigured) {
+        try {
+          await setDoc(doc(db, "activities", activity.id), activity);
+        } catch (e) {
+          console.error("Error saving activity:", e);
+        }
+      }
     };
 
     return {
@@ -182,7 +203,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       activities,
       profile,
       addToCart: (product) => {
-        const prev = readStore<CartItem[]>(KEY_CART, []);
+        const prev = readStore<CartItem[]>(KEY_CART, EMPTY_CART);
         const found = prev.find((item) => item.product.id === product.id);
         const next = found
           ? prev.map((item) =>
@@ -192,21 +213,23 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             )
           : [...prev, { product, quantity: 1 }];
         writeStore(KEY_CART, next);
+        setCartItems(next);
         addActivity(`Added ${product.name} to cart`);
       },
       buyNow: (product) => {
-        writeStore(KEY_CART, [{ product, quantity: 1 }]);
+        const next = [{ product, quantity: 1 }];
+        writeStore(KEY_CART, next);
+        setCartItems(next);
         addActivity(`Started Buy Now for ${product.name}`);
       },
       removeFromCart: (productId) => {
-        const prev = readStore<CartItem[]>(KEY_CART, []);
-        writeStore(
-          KEY_CART,
-          prev.filter((item) => item.product.id !== productId),
-        );
+        const prev = readStore<CartItem[]>(KEY_CART, EMPTY_CART);
+        const next = prev.filter((item) => item.product.id !== productId);
+        writeStore(KEY_CART, next);
+        setCartItems(next);
       },
       updateQuantity: (productId, quantity) => {
-        const prev = readStore<CartItem[]>(KEY_CART, []);
+        const prev = readStore<CartItem[]>(KEY_CART, EMPTY_CART);
         const next = prev
           .map((item) =>
             item.product.id === productId
@@ -215,28 +238,36 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           )
           .filter((item) => item.quantity > 0);
         writeStore(KEY_CART, next);
+        setCartItems(next);
       },
-      clearCart: () => writeStore<CartItem[]>(KEY_CART, []),
+      clearCart: () => {
+        writeStore<CartItem[]>(KEY_CART, EMPTY_CART);
+        setCartItems(EMPTY_CART);
+      },
       addAddress: (addressInput) => {
         const address: Address = { id: crypto.randomUUID(), ...addressInput };
-        const prev = readStore<Address[]>(KEY_ADDR, []);
-        writeStore(KEY_ADDR, [address, ...prev]);
+        const prev = readStore<Address[]>(KEY_ADDR, EMPTY_ADDR);
+        const next = [address, ...prev];
+        writeStore(KEY_ADDR, next);
+        setAddresses(next);
         addActivity(`Saved address for ${address.fullName}`);
         return address;
       },
       updateProfile: (nextProfile) => {
         writeStore(KEY_PROFILE, nextProfile);
+        setProfile(nextProfile);
         addActivity("Updated profile details");
       },
       placeOrder: ({ paymentMode, address }) => {
-        const currentCart = readStore<CartItem[]>(KEY_CART, []);
+        const currentCart = readStore<CartItem[]>(KEY_CART, EMPTY_CART);
         const total = currentCart.reduce(
           (acc, item) => acc + item.product.price * item.quantity,
           0,
         );
         const orderId = `TK-${Date.now().toString().slice(-8)}`;
-        const nextOrder: Order = {
+        const nextOrder: Order & { userId: string } = {
           id: orderId,
+          userId: user?.uid || "guest",
           items: currentCart,
           total,
           paymentMode,
@@ -244,9 +275,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           status: "Placed",
           createdAt: new Date().toISOString(),
         };
-        const prevOrders = readStore<Order[]>(KEY_ORDERS, []);
-        writeStore(KEY_ORDERS, [nextOrder, ...prevOrders]);
-        writeStore<CartItem[]>(KEY_CART, []);
+        
+        if (isFirebaseConfigured) {
+          setDoc(doc(db, "orders", orderId), nextOrder).catch(console.error);
+        }
+
+        writeStore<CartItem[]>(KEY_CART, EMPTY_CART);
+        setCartItems(EMPTY_CART);
         addActivity(`Placed order ${orderId} via ${paymentMode}`);
         return orderId;
       },

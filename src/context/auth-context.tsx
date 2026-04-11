@@ -6,8 +6,21 @@ import {
   signInWithPopup,
   signOut,
 } from "firebase/auth";
-import { createContext, useContext, useEffect, useMemo, useSyncExternalStore, useState } from "react";
-import { auth, googleProvider, isFirebaseConfigured } from "@/lib/firebase";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import {
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  orderBy,
+  limit,
+  setDoc,
+  updateDoc,
+  arrayUnion,
+  arrayRemove,
+  getDoc,
+} from "firebase/firestore";
+import { auth, db, googleProvider, isFirebaseConfigured } from "@/lib/firebase";
 
 const LOCAL_AUTH_KEY = "techkart_local_auth";
 const AUTH_LOG_KEY = "techkart_auth_log";
@@ -145,71 +158,93 @@ function normalizeEmail(email: string | null | undefined) {
   return (email ?? "").trim().toLowerCase();
 }
 
-function isBlockedEmail(email: string | null | undefined) {
+function isBlockedEmail(email: string | null | undefined, blockedList: string[]) {
   const normalized = normalizeEmail(email);
   if (!normalized) {
     return false;
   }
-
-  return readJsonStore<string[]>(BLOCKED_USERS_KEY, []).includes(normalized);
+  return blockedList.includes(normalized);
 }
 
-function appendAuthLog(entry: Omit<AuthLogEntry, "id" | "createdAt">) {
-  const nextEntry: AuthLogEntry = {
+async function appendAuthLog(entry: Omit<AuthLogEntry, "id" | "createdAt">) {
+  if (!isFirebaseConfigured) return;
+  
+  const logEntry: AuthLogEntry = {
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
     ...entry,
   };
 
-  const current = readJsonStore<AuthLogEntry[]>(AUTH_LOG_KEY, []);
-  writeJsonStore(AUTH_LOG_KEY, [nextEntry, ...current].slice(0, 100));
+  try {
+    const logRef = doc(collection(db, "auth_logs"), logEntry.id);
+    await setDoc(logRef, logEntry);
+  } catch (error) {
+    console.error("Error appending auth log:", error);
+  }
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(() => readLocalUser());
-  const [loading, setLoading] = useState(isFirebaseConfigured);
-  const [authError, setAuthError] = useState(
-    isFirebaseConfigured
-      ? ""
-      : "Google sign-in needs a valid Firebase configuration. Credentials login works locally right now.",
-  );
-  const authLogs = useSyncExternalStore(
-    (callback) => subscribeStoreKey(AUTH_LOG_KEY, callback),
-    () => readJsonStore<AuthLogEntry[]>(AUTH_LOG_KEY, []),
-    () => [],
-  );
-  const blockedUsers = useSyncExternalStore(
-    (callback) => subscribeStoreKey(BLOCKED_USERS_KEY, callback),
-    () => readJsonStore<string[]>(BLOCKED_USERS_KEY, []),
-    () => [],
-  );
+  const [loading, setLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
+  const [authLogs, setAuthLogs] = useState<AuthLogEntry[]>([]);
+  const [blockedUsers, setBlockedUsers] = useState<string[]>([]);
 
   useEffect(() => {
     if (!isFirebaseConfigured) {
       setLoading(false);
-      return () => undefined;
+      return;
     }
 
-    const unsub = onAuthStateChanged(auth, async (nextUser) => {
-      if (nextUser?.email && isBlockedEmail(nextUser.email)) {
-        appendAuthLog({
-          email: normalizeEmail(nextUser.email),
-          displayName: nextUser.displayName ?? nextUser.email,
-          provider: "google",
-          action: "blocked_attempt",
-        });
-        await signOut(auth);
-        setUser(null);
-        setAuthError("This account has been blocked by admin access control.");
-        setLoading(false);
-        return;
+    // Subscribe to auth logs
+    const logsQuery = query(
+      collection(db, "auth_logs"),
+      orderBy("createdAt", "desc"),
+      limit(100)
+    );
+    const unsubLogs = onSnapshot(logsQuery, (snapshot) => {
+      const logs = snapshot.docs.map(doc => doc.data() as AuthLogEntry);
+      setAuthLogs(logs);
+    });
+
+    // Subscribe to blocked users
+    const settingsRef = doc(db, "settings", "access_control");
+    const unsubBlocked = onSnapshot(settingsRef, (snapshot) => {
+      if (snapshot.exists()) {
+        setBlockedUsers(snapshot.data().blockedEmails || []);
+      }
+    });
+
+    const unsubAuth = onAuthStateChanged(auth, async (nextUser) => {
+      if (nextUser?.email) {
+        // Need to check current blocked list
+        const settingsSnap = await getDoc(settingsRef);
+        const currentBlocked = settingsSnap.exists() ? settingsSnap.data().blockedEmails || [] : [];
+        
+        if (currentBlocked.includes(normalizeEmail(nextUser.email))) {
+          await appendAuthLog({
+            email: normalizeEmail(nextUser.email),
+            displayName: nextUser.displayName ?? nextUser.email,
+            provider: "google",
+            action: "blocked_attempt",
+          });
+          await signOut(auth);
+          setUser(null);
+          setAuthError("This account has been blocked by admin access control.");
+          setLoading(false);
+          return;
+        }
       }
 
       setUser(nextUser ? mapFirebaseUser(nextUser) : readLocalUser());
       setLoading(false);
     });
 
-    return () => unsub();
+    return () => {
+      unsubLogs();
+      unsubBlocked();
+      unsubAuth();
+    };
   }, []);
 
   const value = useMemo(
@@ -231,8 +266,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           const nextUser = result.user;
           const normalizedEmail = normalizeEmail(nextUser.email);
 
-          if (isBlockedEmail(normalizedEmail)) {
-            appendAuthLog({
+          if (isBlockedEmail(normalizedEmail, blockedUsers)) {
+            await appendAuthLog({
               email: normalizedEmail,
               displayName: nextUser.displayName ?? normalizedEmail,
               provider: "google",
@@ -242,7 +277,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             throw new Error("This account has been blocked by admin access control.");
           }
 
-          appendAuthLog({
+          await appendAuthLog({
             email: normalizedEmail,
             displayName: nextUser.displayName ?? normalizedEmail,
             provider: "google",
@@ -288,8 +323,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           throw new Error("Enter a password with at least 6 characters.");
         }
 
-        if (isBlockedEmail(normalizedEmail)) {
-          appendAuthLog({
+        if (isBlockedEmail(normalizedEmail, blockedUsers)) {
+          await appendAuthLog({
             email: normalizedEmail,
             displayName: normalizedName || normalizedEmail,
             provider: "credentials",
@@ -306,7 +341,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
 
         writeLocalUser(localUser);
-        appendAuthLog({
+        await appendAuthLog({
           email: normalizedEmail,
           displayName: localUser.displayName ?? normalizedEmail,
           provider: "credentials",
@@ -327,30 +362,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         writeLocalUser(null);
         setUser(null);
         if (activeUser?.email) {
-          appendAuthLog({
+          await appendAuthLog({
             email: normalizeEmail(activeUser.email),
             displayName: activeUser.displayName ?? activeUser.email,
             provider: activeUser.provider,
             action: "logout",
           });
         }
-        setAuthError(
-          isFirebaseConfigured
-            ? ""
-            : "Google sign-in needs a valid Firebase configuration. Credentials login works locally right now.",
-        );
+        setAuthError("");
       },
-      toggleBlockedUser: (email: string) => {
+      toggleBlockedUser: async (email: string) => {
         const normalized = normalizeEmail(email);
-        if (!normalized || normalized === ADMIN_EMAIL) {
+        if (!normalized || normalized === ADMIN_EMAIL || !isFirebaseConfigured) {
           return;
         }
 
-        const current = readJsonStore<string[]>(BLOCKED_USERS_KEY, []);
-        const next = current.includes(normalized)
-          ? current.filter((item) => item !== normalized)
-          : [...current, normalized].sort();
-        writeJsonStore(BLOCKED_USERS_KEY, next);
+        try {
+          const settingsRef = doc(db, "settings", "access_control");
+          const isCurrentlyBlocked = blockedUsers.includes(normalized);
+          
+          await updateDoc(settingsRef, {
+            blockedEmails: isCurrentlyBlocked 
+              ? arrayRemove(normalized) 
+              : arrayUnion(normalized)
+          });
+        } catch (error) {
+          // If document doesn't exist, create it
+          const settingsRef = doc(db, "settings", "access_control");
+          await setDoc(settingsRef, {
+            blockedEmails: [normalized]
+          }, { merge: true });
+        }
 
         if (user?.email && normalizeEmail(user.email) === normalized) {
           writeLocalUser(null);
