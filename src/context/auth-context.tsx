@@ -226,51 +226,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       blockedUsers,
       authLogs,
       signInWithGoogle: async () => {
+        setAuthError("");
+        // Reset state before login to prevent "Already Logged In" issues
+        setUser(null);
+        writeLocalUser(null);
+        
         if (!isFirebaseConfigured) {
-          throw new Error(
-            "Firebase env vars are missing. Add NEXT_PUBLIC_FIREBASE_* values.",
-          );
+          throw new Error("Firebase is not configured.");
         }
+
         try {
           const result = await signInWithPopup(auth, googleProvider);
-          const nextUser = result.user;
-          const normalizedEmail = normalizeEmail(nextUser.email);
-
-          if (isBlockedEmail(normalizedEmail, blockedUsers)) {
-            await appendAuthLog({
-              email: normalizedEmail,
-              displayName: nextUser.displayName ?? normalizedEmail,
-              provider: "google",
-              action: "blocked_attempt",
-            });
-            await signOut(auth);
-            throw new Error("This account has been blocked by admin access control.");
-          }
-
+          const mapped = mapFirebaseUser(result.user);
+          setUser(mapped);
+          writeLocalUser(mapped);
+          
           await appendAuthLog({
-            email: normalizedEmail,
-            displayName: nextUser.displayName ?? normalizedEmail,
+            email: normalizeEmail(mapped.email),
+            displayName: mapped.displayName ?? mapped.email ?? "User",
             provider: "google",
             action: "login",
           });
-          setAuthError("");
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : "Google sign-in failed.";
-          if (message.includes("auth/unauthorized-domain")) {
-            const nextMessage =
-              "Google sign-in is blocked because this deployed domain is not authorized in Firebase. Add your site domain in Firebase Console > Authentication > Settings > Authorized domains.";
-            setAuthError(nextMessage);
-            throw new Error(nextMessage);
+        } catch (error: any) {
+          if (error.code !== "auth/popup-closed-by-user") {
+            throw error;
           }
-          if (message.includes("auth/api-key-not-valid")) {
-            const nextMessage =
-              "Google sign-in is unavailable because the Firebase API key is invalid. Add a valid Firebase Web API key in .env.local and restart. Credentials login still works locally.";
-            setAuthError(nextMessage);
-            throw new Error(nextMessage);
-          }
-          setAuthError(message);
-          throw error;
         }
       },
       signInWithCredentials: async (input: { email: string; password: string; fullName?: string }) => {
