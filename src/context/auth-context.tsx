@@ -22,10 +22,8 @@ import {
 } from "firebase/firestore";
 import { auth, db, googleProvider, isFirebaseConfigured } from "@/lib/firebase";
 
-const LOCAL_AUTH_KEY = "techkart_local_auth";
-const AUTH_LOG_KEY = "techkart_auth_log";
-const BLOCKED_USERS_KEY = "techkart_blocked_users";
 const ADMIN_EMAIL = "sk.nehra2005@gmail.com";
+const LOCAL_AUTH_KEY = "techkart_auth_user";
 
 export interface AuthUser {
   uid: string;
@@ -71,30 +69,23 @@ function mapFirebaseUser(user: User): AuthUser {
   };
 }
 
-function readLocalUser() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
+// Simplified, high-performance auth persistence
+function readLocalUser(): AuthUser | null {
+  if (typeof window === "undefined") return null;
   try {
-    const raw = localStorage.getItem(LOCAL_AUTH_KEY);
-    return raw ? (JSON.parse(raw) as AuthUser) : null;
+    const data = localStorage.getItem(LOCAL_AUTH_KEY);
+    return data ? JSON.parse(data) : null;
   } catch {
     return null;
   }
 }
 
 function writeLocalUser(user: AuthUser | null) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  if (!user) {
-    localStorage.removeItem(LOCAL_AUTH_KEY);
-    return;
-  }
-
-  localStorage.setItem(LOCAL_AUTH_KEY, JSON.stringify(user));
+  if (typeof window === "undefined") return;
+  try {
+    if (user) localStorage.setItem(LOCAL_AUTH_KEY, JSON.stringify(user));
+    else localStorage.removeItem(LOCAL_AUTH_KEY);
+  } catch {}
 }
 
 const authCache = new Map<string, { raw: string | null; parsed: unknown }>();
@@ -183,9 +174,9 @@ async function appendAuthLog(entry: Omit<AuthLogEntry, "id" | "createdAt">) {
   }
 }
 
-// Remove all browser-side storage sync to prevent slowness and infinite loops
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(() => readLocalUser());
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
   const [authLogs, setAuthLogs] = useState<AuthLogEntry[]>([]);
@@ -197,17 +188,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Subscribe to auth logs in real-time
-    const logsQuery = query(
-      collection(db, "auth_logs"),
-      orderBy("createdAt", "desc"),
-      limit(50)
-    );
-    const unsubLogs = onSnapshot(logsQuery, (snapshot) => {
-      setAuthLogs(snapshot.docs.map(doc => doc.data() as AuthLogEntry));
-    });
-
-    // Subscribe to blocked users in real-time
+    // Only one listener for essential global data
     const settingsRef = doc(db, "settings", "access_control");
     const unsubBlocked = onSnapshot(settingsRef, (snapshot) => {
       if (snapshot.exists()) {
@@ -215,17 +196,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    const unsubAuth = onAuthStateChanged(auth, async (nextUser) => {
+    const unsubAuth = onAuthStateChanged(auth, (nextUser) => {
       if (nextUser) {
-        setUser(mapFirebaseUser(nextUser));
+        const mapped = mapFirebaseUser(nextUser);
+        setUser(mapped);
+        writeLocalUser(mapped);
       } else {
-        setUser(null);
+        // Only clear if we were using Firebase (not credentials)
+        if (user?.provider === "google") {
+          setUser(null);
+          writeLocalUser(null);
+        }
       }
       setLoading(false);
     });
 
     return () => {
-      unsubLogs();
       unsubBlocked();
       unsubAuth();
     };
