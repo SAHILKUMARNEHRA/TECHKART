@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getProductById } from "@/lib/products";
 import { getOrCreatePriceHistory } from "@/lib/server/price-history-store";
 
+export const dynamic = "force-dynamic";
+
 interface RouteProps {
   params: Promise<{ id: string }>;
 }

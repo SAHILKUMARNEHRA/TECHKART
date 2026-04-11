@@ -507,84 +507,96 @@ async function fetchCategoryProducts(
 }
 
 export async function getLiveMarketProducts(limitPerCategory = 14): Promise<Product[]> {
-  if (liveProductsCache && liveProductsCache.expiresAt > Date.now()) {
-    return liveProductsCache.products;
+  try {
+    if (liveProductsCache && liveProductsCache.expiresAt > Date.now()) {
+      return liveProductsCache.products;
+    }
+
+    const token = await getEbayAccessToken();
+
+    const categories: ProductCategory[] = [
+      "Mobiles",
+      "Laptops",
+      "Tablets",
+      "Smartwatches",
+      "Earbuds",
+    ];
+
+    const items = await Promise.allSettled(
+      categories.map((category) =>
+        fetchCategoryProducts(token, category, limitPerCategory),
+      ),
+    );
+
+    const products = items
+      .filter(
+        (
+          result,
+        ): result is PromiseFulfilledResult<Product[]> =>
+          result.status === "fulfilled",
+      )
+      .flatMap((result) => result.value);
+
+    if (products.length > 0) {
+      liveProductsCache = {
+        products,
+        expiresAt: Date.now() + LIVE_PRODUCTS_CACHE_TTL_MS,
+      };
+    }
+
+    return products;
+  } catch (error) {
+    console.error("Critical error in getLiveMarketProducts:", error);
+    return [];
   }
-
-  const token = await getEbayAccessToken();
-
-  const categories: ProductCategory[] = [
-    "Mobiles",
-    "Laptops",
-    "Tablets",
-    "Smartwatches",
-    "Earbuds",
-  ];
-
-  const items = await Promise.allSettled(
-    categories.map((category) =>
-      fetchCategoryProducts(token, category, limitPerCategory),
-    ),
-  );
-
-  const products = items
-    .filter(
-      (
-        result,
-      ): result is PromiseFulfilledResult<Product[]> =>
-        result.status === "fulfilled",
-    )
-    .flatMap((result) => result.value);
-
-  liveProductsCache = {
-    products,
-    expiresAt: Date.now() + LIVE_PRODUCTS_CACHE_TTL_MS,
-  };
-
-  return products;
 }
 
 export async function getLiveProductById(id: string): Promise<Product | undefined> {
-  const token = await getEbayAccessToken();
-  const rawItemId = decodeURIComponent(id).replace(/^ebay-/, "");
-  const endpoint = `${getEbayBaseUrl()}/buy/browse/v1/item/${encodeURIComponent(rawItemId)}`;
-  const response = await fetch(endpoint, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-      Accept: "application/json",
-    },
-    next: { revalidate: 900 },
-    signal: AbortSignal.timeout(MARKET_FETCH_TIMEOUT_MS),
-  });
+  try {
+    const token = await getEbayAccessToken();
+    const rawItemId = decodeURIComponent(id).replace(/^ebay-/, "");
+    const endpoint = `${getEbayBaseUrl()}/buy/browse/v1/item/${encodeURIComponent(rawItemId)}`;
+    const response = await fetch(endpoint, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        Accept: "application/json",
+      },
+      next: { revalidate: 900 },
+      signal: AbortSignal.timeout(MARKET_FETCH_TIMEOUT_MS),
+    });
 
-  if (!response.ok) {
+    if (!response.ok) {
+      return undefined;
+    }
+
+    const item = (await response.json()) as EbayItemDetailResponse;
+    const usdToInr = await getUsdToInrRate();
+    const category = inferCategoryFromTitle(item.title);
+    const normalized = normalizeToProduct(
+      {
+        itemId: item.itemId,
+        title: item.title,
+        condition: item.condition,
+        price: item.price,
+        image: item.image,
+        seller: item.seller,
+      },
+      category,
+      usdToInr,
+    );
+
+    if (!normalized) {
+      return undefined;
+    }
+
+    const extraGallery = item.additionalImages?.map((entry) => entry.imageUrl) ?? [];
+    return {
+      ...normalized,
+      gallery: [normalized.image, ...extraGallery].filter(Boolean).slice(0, 6),
+    };
+  } catch (error) {
+    console.error("Critical error in getLiveProductById:", error);
     return undefined;
   }
-
-  const item = (await response.json()) as EbayItemDetailResponse;
-  const usdToInr = await getUsdToInrRate();
-  const category = inferCategoryFromTitle(item.title);
-  const normalized = normalizeToProduct(
-    {
-      itemId: item.itemId,
-      title: item.title,
-      condition: item.condition,
-      price: item.price,
-      image: item.image,
-      seller: item.seller,
-    },
-    category,
-    usdToInr,
-  );
-
-  if (!normalized) {
-    return undefined;
-  }
-
-  const extraGallery = item.additionalImages?.map((entry) => entry.imageUrl) ?? [];
-  return {
-    ...normalized,
-    gallery: [normalized.image, ...extraGallery].filter(Boolean).slice(0, 6),
-  };
 }

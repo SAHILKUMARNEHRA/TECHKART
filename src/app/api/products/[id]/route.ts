@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getProductById } from "@/lib/products";
 
+export const dynamic = "force-dynamic";
+
 interface RouteProps {
   params: Promise<{ id: string }>;
 }
