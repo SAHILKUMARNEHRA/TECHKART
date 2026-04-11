@@ -71,9 +71,11 @@ const TRUSTED_BRANDS = [
   "iQOO",
 ];
 
-let tokenCache: { token: string; expiresAt: number } | null = null;
+// 30-minute caching for all market data
+const CACHE_TTL = 30 * 60 * 1000;
+let tokenCache: { token: string; expiry: number } | null = null;
+const productsCache = new Map<string, { data: any; timestamp: number }>();
 let usdToInrCache: { value: number; expiresAt: number } | null = null;
-let liveProductsCache: { products: Product[]; expiresAt: number } | null = null;
 
 const categoryQueries: Record<ProductCategory, string[]> = {
   Mobiles: [
@@ -179,44 +181,40 @@ export function hasRealMarketConfig() {
   return Boolean(process.env.EBAY_CLIENT_ID && process.env.EBAY_CLIENT_SECRET);
 }
 
-async function getEbayAccessToken() {
-  if (tokenCache && tokenCache.expiresAt > Date.now() + 60_000) {
+async function getEbayToken() {
+  if (tokenCache && Date.now() < tokenCache.expiry) {
     return tokenCache.token;
   }
 
-  const id = process.env.EBAY_CLIENT_ID;
-  const secret = process.env.EBAY_CLIENT_SECRET;
+  const clientId = process.env.EBAY_CLIENT_ID;
+  const clientSecret = process.env.EBAY_CLIENT_SECRET;
 
-  if (!id || !secret) {
-    throw new Error("Missing eBay credentials");
+  if (!clientId || !clientSecret) return null;
+
+  try {
+    const auth = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+    const response = await fetch(`${getEbayBaseUrl()}/identity/v1/oauth2/token`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${auth}`,
+      },
+      body: "grant_type=client_credentials&scope=https://api.ebay.com/oauth/api_scope",
+      next: { revalidate: 1800 }, // 30 minutes Next.js cache
+    });
+
+    const data = await response.json() as EbayTokenResponse & { expires_in: number };
+    if (data.access_token) {
+      tokenCache = {
+        token: data.access_token,
+        expiry: Date.now() + (data.expires_in - 60) * 1000,
+      };
+      return data.access_token;
+    }
+  } catch (error) {
+    console.error("eBay token error:", error);
   }
-
-  const basicAuth = Buffer.from(`${id}:${secret}`).toString("base64");
-
-  const response = await fetch(`${getEbayBaseUrl()}/identity/v1/oauth2/token`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${basicAuth}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: "grant_type=client_credentials&scope=https%3A%2F%2Fapi.ebay.com%2Foauth%2Fapi_scope",
-    cache: "no-store",
-    next: { revalidate: 0 },
-    signal: AbortSignal.timeout(MARKET_FETCH_TIMEOUT_MS),
-  });
-
-  if (!response.ok) {
-    throw new Error("Unable to fetch eBay access token");
-  }
-
-  const payload = (await response.json()) as EbayTokenResponse;
-
-  tokenCache = {
-    token: payload.access_token,
-    expiresAt: Date.now() + payload.expires_in * 1000,
-  };
-
-  return payload.access_token;
+  return null;
 }
 
 async function getUsdToInrRate() {
@@ -506,54 +504,43 @@ async function fetchCategoryProducts(
     .slice(0, Math.max(limit, 14));
 }
 
-export async function getLiveMarketProducts(limitPerCategory = 14): Promise<Product[]> {
+export async function getLiveMarketProducts(count = 12) {
+  const cacheKey = `products-${count}`;
+  const cached = productsCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+
+  const token = await getEbayToken();
+  if (!token) return [];
+
   try {
-    if (liveProductsCache && liveProductsCache.expiresAt > Date.now()) {
-      return liveProductsCache.products;
-    }
-
-    const token = await getEbayAccessToken();
-
-    const categories: ProductCategory[] = [
-      "Mobiles",
-      "Laptops",
-      "Tablets",
-      "Smartwatches",
-      "Earbuds",
-    ];
-
-    const items = await Promise.allSettled(
-      categories.map((category) =>
-        fetchCategoryProducts(token, category, limitPerCategory),
-      ),
+    const response = await fetch(
+      `${getEbayBaseUrl()}/buy/browse/v1/item_summary/search?q=smartphone+laptop&limit=${count}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+        next: { revalidate: 1800 },
+      },
     );
 
-    const products = items
-      .filter(
-        (
-          result,
-        ): result is PromiseFulfilledResult<Product[]> =>
-          result.status === "fulfilled",
-      )
-      .flatMap((result) => result.value);
-
-    if (products.length > 0) {
-      liveProductsCache = {
-        products,
-        expiresAt: Date.now() + LIVE_PRODUCTS_CACHE_TTL_MS,
-      };
-    }
-
+    const data = await response.json() as EbaySearchResponse;
+    const usdToInr = await getUsdToInrRate();
+    const products = (data.itemSummaries || [])
+      .map(item => normalizeToProduct(item, inferCategoryFromTitle(item.title), usdToInr))
+      .filter((p): p is Product => p !== null);
+      
+    productsCache.set(cacheKey, { data: products, timestamp: Date.now() });
     return products;
   } catch (error) {
-    console.error("Critical error in getLiveMarketProducts:", error);
+    console.error("eBay search error:", error);
     return [];
   }
 }
 
 export async function getLiveProductById(id: string): Promise<Product | undefined> {
   try {
-    const token = await getEbayAccessToken();
+    const token = await getEbayToken();
+    if (!token) return undefined;
     const rawItemId = decodeURIComponent(id).replace(/^ebay-/, "");
     const endpoint = `${getEbayBaseUrl()}/buy/browse/v1/item/${encodeURIComponent(rawItemId)}`;
     const response = await fetch(endpoint, {

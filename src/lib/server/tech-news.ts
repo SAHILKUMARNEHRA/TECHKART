@@ -1,69 +1,59 @@
-import { cache } from "react";
-
-const NEWS_FETCH_TIMEOUT_MS = 5000;
-
-export interface TechNewsItem {
+export interface TechNews {
+  id: string;
   title: string;
+  description: string;
   url: string;
-  source: string;
+  imageUrl: string;
   publishedAt: string;
+  source: string;
 }
 
-export const getTechNews = cache(async (): Promise<TechNewsItem[]> => {
-  const key = process.env.NEWS_API_KEY;
+const FALLBACK_NEWS: TechNews[] = [
+  {
+    id: "fallback-1",
+    title: "Tech news unavailable right now",
+    description: "Stay updated with the latest in technology.",
+    url: "#",
+    imageUrl: "https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&q=80&w=400",
+    publishedAt: new Date().toISOString(),
+    source: "System",
+  },
+];
 
-  if (!key) {
-    return [
-      {
-        title: "Add NEWS_API_KEY to load live tech headlines",
-        url: "https://newsapi.org/",
-        source: "Setup",
-        publishedAt: new Date().toISOString(),
-      },
-    ];
+const CACHE_TTL = 30 * 60 * 1000; // 30 minutes
+let newsCache: { data: TechNews[]; timestamp: number } | null = null;
+
+export async function getTechNews(): Promise<TechNews[]> {
+  if (newsCache && Date.now() - newsCache.timestamp < CACHE_TTL) {
+    return newsCache.data;
   }
+
+  const apiKey = process.env.NEWS_API_KEY;
+  if (!apiKey) return FALLBACK_NEWS;
 
   try {
-    const url = new URL("https://newsapi.org/v2/top-headlines");
-    url.searchParams.set("category", "technology");
-    url.searchParams.set("language", "en");
-    url.searchParams.set("pageSize", "6");
-    url.searchParams.set("apiKey", key);
+    const response = await fetch(
+      `https://newsapi.org/v2/top-headlines?category=technology&language=en&pageSize=10&apiKey=${apiKey}`,
+      { next: { revalidate: 1800 } },
+    );
 
-    const response = await fetch(url, {
-      next: { revalidate: 1800 },
-      signal: AbortSignal.timeout(NEWS_FETCH_TIMEOUT_MS),
-    });
-    if (!response.ok) {
-      throw new Error("Failed news fetch");
-    }
+    if (!response.ok) throw new Error("News fetch failed");
 
-    const payload = (await response.json()) as {
-      articles?: Array<{
-        title?: string;
-        url?: string;
-        source?: { name?: string };
-        publishedAt?: string;
-      }>;
-    };
+    const data = await response.json();
+    const news = (data.articles || []).map((article: any, index: number) => ({
+      id: `news-${index}`,
+      title: article.title,
+      description: article.description || "Stay updated with the latest in technology.",
+      url: article.url,
+      imageUrl: article.urlToImage || "https://images.unsplash.com/photo-1519389950473-47ba0277781c?auto=format&fit=crop&q=80&w=400",
+      publishedAt: article.publishedAt,
+      source: article.source?.name || "Tech News",
+    }));
 
-    return (payload.articles ?? [])
-      .filter((item) => item.title && item.url)
-      .map((item) => ({
-        title: item.title ?? "Untitled",
-        url: item.url ?? "#",
-        source: item.source?.name ?? "Unknown",
-        publishedAt: item.publishedAt ?? new Date().toISOString(),
-      }))
-      .slice(0, 6);
-  } catch {
-    return [
-      {
-        title: "Tech news unavailable right now",
-        url: "#",
-        source: "System",
-        publishedAt: new Date().toISOString(),
-      },
-    ];
+    newsCache = { data: news, timestamp: Date.now() };
+    return news;
+  } catch (error) {
+    console.error("News fetch error:", error);
+    return FALLBACK_NEWS;
   }
-});
+}
