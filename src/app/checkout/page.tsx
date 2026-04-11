@@ -1,15 +1,27 @@
 "use client";
 
 import Image from "next/image";
-import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { FormEvent, useEffect, useState, Suspense } from "react";
 import { useCart } from "@/context/cart-context";
+import { useAuth } from "@/context/auth-context";
 import { formatINR } from "@/lib/utils";
 
 export default function CheckoutPage() {
+  return (
+    <Suspense fallback={<div className="mx-auto max-w-3xl px-4 py-16 text-center">Loading checkout...</div>}>
+      <CheckoutContent />
+    </Suspense>
+  );
+}
+
+function CheckoutContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { cartItems, cartTotal, addAddress, addresses, placeOrder } = useCart();
-  const [paymentMode, setPaymentMode] = useState("UPI");
+  const { user } = useAuth();
+  const [paymentMode, setPaymentMode] = useState("Stripe");
+  const [loading, setLoading] = useState(false);
   const [selectedAddressId, setSelectedAddressId] = useState(addresses[0]?.id ?? "");
 
   const [form, setForm] = useState({
@@ -20,6 +32,21 @@ export default function CheckoutPage() {
     state: "",
     pincode: "",
   });
+
+  useEffect(() => {
+    const success = searchParams.get("success");
+    if (success === "true") {
+      // Finalize order after successful Stripe payment
+      const savedAddress = localStorage.getItem("temp_checkout_address");
+      if (savedAddress && cartItems.length > 0) {
+        const address = JSON.parse(savedAddress);
+        const orderId = placeOrder({ paymentMode: "Stripe", address });
+        localStorage.removeItem("temp_checkout_address");
+        router.push(`/orders/${orderId}`);
+      }
+    }
+  }, [searchParams, cartItems, placeOrder, router]);
+
   const deliveryDays = 2 + (cartItems.length % 3);
   const shippingFee = cartTotal > 24999 ? 0 : 99;
   const payable = cartTotal + shippingFee;
@@ -28,14 +55,45 @@ export default function CheckoutPage() {
     return <div className="mx-auto max-w-3xl px-4 py-16 text-center">Cart is empty.</div>;
   }
 
-  const onPlaceOrder = (event: FormEvent) => {
+  const onPlaceOrder = async (event: FormEvent) => {
     event.preventDefault();
+    setLoading(true);
+
     let finalAddress = addresses.find((item) => item.id === selectedAddressId);
     if (!finalAddress) {
       finalAddress = addAddress(form);
     }
-    const orderId = placeOrder({ paymentMode, address: finalAddress });
-    router.push(`/orders/${orderId}`);
+
+    if (paymentMode === "Stripe") {
+      try {
+        // Save address temporarily to recover it after redirect
+        localStorage.setItem("temp_checkout_address", JSON.stringify(finalAddress));
+
+        const response = await fetch("/api/checkout/stripe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: cartItems,
+            email: user?.email,
+            address: finalAddress,
+          }),
+        });
+
+        const data = await response.json();
+        if (data.url) {
+          window.location.href = data.url;
+        } else {
+          throw new Error(data.error || "Failed to create Stripe session");
+        }
+      } catch (error) {
+        console.error("Payment Error:", error);
+        alert("Could not initiate Stripe payment. Please try another method.");
+        setLoading(false);
+      }
+    } else {
+      const orderId = placeOrder({ paymentMode, address: finalAddress });
+      router.push(`/orders/${orderId}`);
+    }
   };
 
   return (
@@ -76,7 +134,7 @@ export default function CheckoutPage() {
 
         <h2 className="pt-2 text-lg font-semibold">Payment Method</h2>
         <div className="flex flex-wrap gap-2 text-sm">
-          {["UPI", "Card", "NetBanking", "Cash on Delivery"].map((mode) => (
+          {["Stripe", "UPI", "Card", "NetBanking", "Cash on Delivery"].map((mode) => (
             <button
               key={mode}
               type="button"
@@ -131,8 +189,11 @@ export default function CheckoutPage() {
             Estimated delivery by {deliveryDays} days after order confirmation.
           </p>
         </div>
-        <button className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white">
-          Buy Now
+        <button 
+          disabled={loading}
+          className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          {loading ? "Processing..." : paymentMode === "Stripe" ? "Pay with Stripe" : "Buy Now"}
         </button>
       </aside>
     </form>
